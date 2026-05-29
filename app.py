@@ -186,6 +186,24 @@ h2 {
 }
 
 hr { border: none !important; border-top: 1px solid #2c2c2e !important; }
+
+/* Green LLM-as-judge button */
+[data-testid="stBaseButton-primary"] > button,
+[data-testid="stButton"] > button {
+    background: #30d158 !important;
+    color: #000000 !important;
+    border: none !important;
+    border-radius: 980px !important;
+    padding: 0.6rem 2rem !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+    letter-spacing: -0.01em !important;
+    width: 100% !important;
+    transition: opacity 0.15s ease !important;
+    cursor: pointer !important;
+}
+[data-testid="stBaseButton-primary"] > button:hover,
+[data-testid="stButton"] > button:hover { opacity: 0.8 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -334,8 +352,8 @@ if st.session_state.result:
 
         st.markdown("## Quality evaluation")
         if st.session_state.ragas_scores is None:
-            if st.button("Run evaluation", use_container_width=True):
-                with st.spinner("Evaluating faithfulness and context precision — ~30 s…"):
+            if st.button("Validate answer · LLM-as-judge", use_container_width=True, type="primary"):
+                with st.spinner("Running LLM-as-judge evaluation — ~30 s…"):
                     try:
                         st.session_state.ragas_scores = evaluate_rag(
                             query=result["query"],
@@ -366,5 +384,3 @@ if st.session_state.result:
                     unsafe_allow_html=True,
                 )
 
-        with st.expander("Token usage"):
-            st.json(result["usage"])
