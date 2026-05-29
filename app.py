@@ -2,48 +2,264 @@
 Streamlit UI for NeuroRAG.
 Run with: streamlit run app.py
 """
+import os
 import streamlit as st
-from rag import ask
+import streamlit.components.v1 as components
+
+try:
+    for _k, _v in st.secrets.items():
+        os.environ.setdefault(_k, str(_v))
+except Exception:
+    pass  # running locally — keys come from .env via load_dotenv() in rag.py
+
+from rag import ask, CLAUDE_MODEL
 
 st.set_page_config(
     page_title="NeuroRAG",
-    page_icon="🧠",
-    layout="wide",
+    page_icon="◉",
+    layout="centered",
 )
 
-st.title("🧠 NeuroRAG")
-from rag import CLAUDE_MODEL
-st.caption(f"Semantic Q&A over your neuroscience library · Pinecone + {CLAUDE_MODEL}")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: -apple-system, 'Inter', BlinkMacSystemFont, sans-serif !important;
+}
+
+.stApp { background: #000000 !important; }
+#MainMenu, footer, header { visibility: hidden; }
+
+.block-container {
+    max-width: 700px !important;
+    padding-top: 5rem !important;
+    padding-bottom: 5rem !important;
+}
+
+/* Title */
+h1 {
+    font-size: 2.4rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.04em !important;
+    color: #f5f5f7 !important;
+    margin-bottom: 0.15rem !important;
+    line-height: 1.1 !important;
+}
+
+/* Caption */
+[data-testid="stCaptionContainer"] p {
+    color: #86868b !important;
+    font-size: 0.9rem !important;
+    letter-spacing: -0.01em !important;
+    margin-bottom: 0.75rem !important;
+}
+
+/* Topic pills */
+.topic-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 2rem;
+    margin-top: 0.25rem;
+}
+.topic-pill {
+    background: #1c1c1e;
+    color: #a1a1a6;
+    border: 1px solid #3a3a3c;
+    border-radius: 980px;
+    padding: 4px 14px;
+    font-size: 0.78rem;
+    font-family: -apple-system, 'Inter', BlinkMacSystemFont, sans-serif;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+}
+
+/* Textarea */
+textarea {
+    border-radius: 14px !important;
+    border: 1.5px solid #3a3a3c !important;
+    background: #1c1c1e !important;
+    font-size: 1rem !important;
+    line-height: 1.6 !important;
+    color: #f5f5f7 !important;
+    resize: none !important;
+    transition: border-color 0.15s ease !important;
+}
+textarea:focus {
+    border-color: #86868b !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+textarea::placeholder { color: #48484a !important; }
+
+/* Form submit button — white pill */
+[data-testid="stFormSubmitButton"] > button {
+    background: #f5f5f7 !important;
+    color: #000000 !important;
+    border: none !important;
+    border-radius: 980px !important;
+    padding: 0.6rem 2rem !important;
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+    letter-spacing: -0.01em !important;
+    width: 100% !important;
+    margin-top: 0.5rem !important;
+    transition: opacity 0.15s ease !important;
+    cursor: pointer !important;
+}
+[data-testid="stFormSubmitButton"] > button:hover { opacity: 0.75 !important; }
+[data-testid="stFormSubmitButton"] > button:active { opacity: 0.5 !important; }
+
+/* Spinner */
+[data-testid="stSpinner"] p { color: #86868b !important; font-size: 0.9rem !important; }
+
+/* Section headings */
+h2 {
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.02em !important;
+    color: #f5f5f7 !important;
+    margin-top: 2.5rem !important;
+    margin-bottom: 0.6rem !important;
+    padding-bottom: 0.5rem !important;
+    border-bottom: 1px solid #2c2c2e !important;
+}
+
+/* Answer + citation text */
+.stMarkdown p { line-height: 1.8; color: #e5e5ea; font-size: 0.97rem; }
+
+/* Expander */
+[data-testid="stExpander"] {
+    border: 1px solid #3a3a3c !important;
+    border-radius: 12px !important;
+    background: #1c1c1e !important;
+    margin-top: 1rem !important;
+}
+[data-testid="stExpander"] summary {
+    font-size: 0.82rem !important;
+    color: #86868b !important;
+    font-weight: 500 !important;
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+    background: #1c1c1e !important;
+    border-right: 1px solid #3a3a3c !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] li,
+[data-testid="stSidebar"] label {
+    color: #86868b !important;
+    font-size: 0.83rem !important;
+    line-height: 1.6 !important;
+}
+[data-testid="stSidebar"] h2 {
+    color: #f5f5f7 !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    border: none !important;
+    padding: 0 !important;
+    margin-top: 0 !important;
+}
+[data-testid="stSidebar"] hr { border-color: #3a3a3c !important; }
+
+/* Slider */
+[data-testid="stSlider"] [role="slider"] {
+    background: #f5f5f7 !important;
+    border-color: #f5f5f7 !important;
+}
+
+/* Divider */
+hr { border: none !important; border-top: 1px solid #2c2c2e !important; }
+</style>
+
+""", unsafe_allow_html=True)
+
+components.html("""
+<script>
+(function () {
+    var doc = window.parent.document;
+    function attachEnter() {
+        doc.querySelectorAll("textarea").forEach(function (ta) {
+            if (ta._nrEnter) return;
+            ta._nrEnter = true;
+            ta.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    var btn = doc.querySelector("[data-testid='stFormSubmitButton'] button");
+                    if (btn) btn.click();
+                }
+            });
+        });
+    }
+    attachEnter();
+    new MutationObserver(attachEnter).observe(doc.body, { childList: true, subtree: true });
+})();
+</script>
+""", height=0)
+
+st.title("NeuroRAG")
+st.markdown(
+    "Proof of concept · end-to-end RAG over a real neuroscience PhD library — "
+    "semantic retrieval + Claude-generated cited answers, built for clinical AI applications.",
+    unsafe_allow_html=False,
+)
+st.caption(f"Semantic search over 951 neuroscience papers · {CLAUDE_MODEL}")
+
+TOPICS = [
+    "Attention", "Expectation", "Reward", "fMRI", "Decision-making",
+    "Perception", "Dopamine", "Working memory", "Bayesian inference",
+    "Neural coding", "EEG / MEG", "Predictive coding", "Consciousness",
+    "Learning", "Eye movements",
+]
+pills_html = '<div class="topic-pills">' + "".join(
+    f'<span class="topic-pill">{t}</span>' for t in TOPICS
+) + "</div>"
+st.markdown(pills_html, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("Settings")
-    k = st.slider("Chunks to retrieve", min_value=4, max_value=20, value=8)
+    st.markdown("#### Settings")
+    k = st.slider(
+        "Sources to consult",
+        min_value=4,
+        max_value=20,
+        value=8,
+        help="Higher = broader context, slower response",
+    )
     st.markdown("---")
     st.markdown(
-        "**How it works**\n"
-        "1. Your query is embedded with `all-MiniLM-L6-v2`\n"
-        "2. Top-K chunks are retrieved from ChromaDB\n"
-        "3. Claude synthesizes a cited answer\n\n"
-        "**Corpus:** your Zotero Google Drive library"
+        "**How it works**\n\n"
+        "1. Your question is embedded into a vector\n"
+        "2. The most relevant paper excerpts are retrieved\n"
+        "3. Claude synthesises a cited answer\n\n"
+        "**Corpus:** your Zotero library (951 papers, 46 K excerpts)\n\n"
+        "*Shift + Enter for a new line.*"
     )
 
-query = st.text_area(
-    "Ask a question about your papers:",
-    placeholder=(
-        "What does the literature say about prior probability effects "
-        "on perceptual decision-making?"
-    ),
-    height=90,
-)
+if "result" not in st.session_state:
+    st.session_state.result = None
 
-if st.button("Ask", type="primary") and query.strip():
-    with st.spinner("Retrieving and generating…"):
-        result = ask(query.strip(), k=k)
+with st.form("query_form"):
+    query = st.text_area(
+        "",
+        placeholder="Ask anything — e.g. What is the role of dopamine in reward learning?",
+        height=120,
+        label_visibility="collapsed",
+    )
+    submitted = st.form_submit_button("Ask", use_container_width=True)
+
+if submitted and query.strip():
+    with st.spinner("Searching and generating…"):
+        st.session_state.result = ask(query.strip(), k=k)
+
+if st.session_state.result:
+    result = st.session_state.result
 
     st.markdown("## Answer")
     st.markdown(result["answer"])
 
-    st.markdown("## Sources retrieved")
+    st.markdown("## Sources")
     for c in result["citations"]:
         st.markdown(
             f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
