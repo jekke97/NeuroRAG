@@ -13,7 +13,7 @@ try:
 except FileNotFoundError:
     pass  # running locally — keys come from .env via load_dotenv() in rag.py
 
-from rag import ask, CLAUDE_MODEL
+from rag import ask, evaluate_rag, CLAUDE_MODEL
 
 DAILY_LIMIT = 10
 
@@ -264,6 +264,8 @@ with st.sidebar:
 
 if "result" not in st.session_state:
     st.session_state.result = None
+if "ragas_scores" not in st.session_state:
+    st.session_state.ragas_scores = None
 
 with st.form("query_form"):
     query = st.text_area(
@@ -278,11 +280,21 @@ if submitted and query.strip():
     if not _rate_limit_ok():
         st.error(f"Daily limit of {DAILY_LIMIT} queries reached. Come back tomorrow.")
     else:
+        st.session_state.ragas_scores = None
         with st.spinner("Searching and generating…"):
             st.session_state.result = ask(query.strip(), k=k)
 
 if st.session_state.result:
     result = st.session_state.result
+
+    # Agent trace — show if the query was reformulated
+    if result.get("agent_steps"):
+        step = result["agent_steps"][0]
+        st.markdown(
+            f'<p style="color:#86868b;font-size:0.83rem;margin-bottom:1.5rem;">'
+            f'↻ Query reformulated to: <em>"{step["reformulated"]}"</em></p>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("## Answer")
     st.markdown(result["answer"])
@@ -291,6 +303,33 @@ if st.session_state.result:
     for c in result["citations"]:
         st.markdown(
             f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
+        )
+
+    st.markdown("## Quality evaluation")
+    if st.session_state.ragas_scores is None:
+        if st.button("Run RAGAS evaluation", use_container_width=True):
+            with st.spinner("Evaluating faithfulness and context precision — ~30 s…"):
+                try:
+                    st.session_state.ragas_scores = evaluate_rag(
+                        query=result["query"],
+                        answer=result["answer"],
+                        chunks=result["chunks"],
+                    )
+                except Exception as e:
+                    st.error(f"Evaluation failed: {e}")
+
+    if st.session_state.ragas_scores:
+        scores = st.session_state.ragas_scores
+        col1, col2 = st.columns(2)
+        col1.metric(
+            "Faithfulness",
+            f"{scores['faithfulness']:.2f} / 1.0",
+            help="How well every claim in the answer is supported by the retrieved excerpts",
+        )
+        col2.metric(
+            "Context precision",
+            f"{scores['context_precision']:.2f} / 1.0",
+            help="How relevant the retrieved excerpts are to the question",
         )
 
     with st.expander("Token usage"):
