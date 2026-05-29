@@ -58,6 +58,7 @@ html, body, [class*="css"] {
 
 .stApp { background: #000000 !important; }
 #MainMenu, footer, header { visibility: hidden; }
+[data-testid="stSidebar"] { display: none !important; }
 
 .block-container {
     max-width: 700px !important;
@@ -65,31 +66,29 @@ html, body, [class*="css"] {
     padding-bottom: 5rem !important;
 }
 
-/* Title */
 h1 {
     font-size: 2.4rem !important;
     font-weight: 700 !important;
     letter-spacing: -0.04em !important;
     color: #f5f5f7 !important;
-    margin-bottom: 0.15rem !important;
+    margin-bottom: 0.5rem !important;
     line-height: 1.1 !important;
 }
 
-/* Caption */
-[data-testid="stCaptionContainer"] p {
-    color: #86868b !important;
-    font-size: 0.9rem !important;
-    letter-spacing: -0.01em !important;
-    margin-bottom: 0.75rem !important;
+.nr-description {
+    color: #86868b;
+    font-size: 0.9rem;
+    line-height: 1.65;
+    margin-bottom: 1.5rem;
+    letter-spacing: -0.01em;
 }
+.nr-description strong { color: #a1a1a6; font-weight: 500; }
 
-/* Topic pills */
 .topic-pills {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 2rem;
-    margin-top: 0.25rem;
 }
 .topic-pill {
     background: #1c1c1e;
@@ -103,7 +102,6 @@ h1 {
     white-space: nowrap;
 }
 
-/* Textarea */
 textarea {
     border-radius: 14px !important;
     border: 1.5px solid #3a3a3c !important;
@@ -121,7 +119,6 @@ textarea:focus {
 }
 textarea::placeholder { color: #48484a !important; }
 
-/* Form submit button — white pill */
 [data-testid="stFormSubmitButton"] > button {
     background: #f5f5f7 !important;
     color: #000000 !important;
@@ -139,10 +136,8 @@ textarea::placeholder { color: #48484a !important; }
 [data-testid="stFormSubmitButton"] > button:hover { opacity: 0.75 !important; }
 [data-testid="stFormSubmitButton"] > button:active { opacity: 0.5 !important; }
 
-/* Spinner */
 [data-testid="stSpinner"] p { color: #86868b !important; font-size: 0.9rem !important; }
 
-/* Section headings */
 h2 {
     font-size: 1.05rem !important;
     font-weight: 600 !important;
@@ -154,10 +149,30 @@ h2 {
     border-bottom: 1px solid #2c2c2e !important;
 }
 
-/* Answer + citation text */
 .stMarkdown p { line-height: 1.8; color: #e5e5ea; font-size: 0.97rem; }
 
-/* Expander */
+/* Out-of-scope answer box */
+.out-of-scope-box {
+    border: 1.5px solid #ff453a;
+    border-radius: 14px;
+    background: rgba(255, 69, 58, 0.07);
+    padding: 18px 22px;
+    margin-top: 1.5rem;
+}
+.out-of-scope-warning {
+    color: #ff6961;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+.out-of-scope-answer {
+    color: #e5e5ea;
+    font-size: 0.97rem;
+    line-height: 1.8;
+}
+
 [data-testid="stExpander"] {
     border: 1px solid #3a3a3c !important;
     border-radius: 12px !important;
@@ -170,38 +185,8 @@ h2 {
     font-weight: 500 !important;
 }
 
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: #1c1c1e !important;
-    border-right: 1px solid #3a3a3c !important;
-}
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] li,
-[data-testid="stSidebar"] label {
-    color: #86868b !important;
-    font-size: 0.83rem !important;
-    line-height: 1.6 !important;
-}
-[data-testid="stSidebar"] h2 {
-    color: #f5f5f7 !important;
-    font-size: 0.9rem !important;
-    font-weight: 600 !important;
-    border: none !important;
-    padding: 0 !important;
-    margin-top: 0 !important;
-}
-[data-testid="stSidebar"] hr { border-color: #3a3a3c !important; }
-
-/* Slider */
-[data-testid="stSlider"] [role="slider"] {
-    background: #f5f5f7 !important;
-    border-color: #f5f5f7 !important;
-}
-
-/* Divider */
 hr { border: none !important; border-top: 1px solid #2c2c2e !important; }
 </style>
-
 """, unsafe_allow_html=True)
 
 components.html("""
@@ -228,12 +213,17 @@ components.html("""
 """, height=0)
 
 st.title("NeuroRAG")
+
 st.markdown(
-    "Proof of concept · end-to-end RAG over a real neuroscience PhD library — "
-    "semantic retrieval + Claude-generated cited answers, built for clinical AI applications.",
-    unsafe_allow_html=False,
+    '<div class="nr-description">'
+    'Ask any question. An <strong>agent</strong> first decides whether it belongs to the '
+    'neuroscience corpus — if so, the most relevant excerpts from 951 papers are retrieved '
+    'and Claude synthesises a cited answer (<strong>RAG</strong>). Off-topic questions are '
+    'answered from general knowledge and flagged clearly. When the initial retrieval misses '
+    'the target, the agent <strong>reformulates the search query automatically</strong>.'
+    '</div>',
+    unsafe_allow_html=True,
 )
-st.caption(f"Semantic search over 951 neuroscience papers · {CLAUDE_MODEL}")
 
 TOPICS = [
     "Attention", "Expectation", "Reward", "fMRI", "Decision-making",
@@ -241,29 +231,12 @@ TOPICS = [
     "Neural coding", "EEG / MEG", "Predictive coding", "Consciousness",
     "Learning", "Eye movements",
 ]
-pills_html = '<div class="topic-pills">' + "".join(
-    f'<span class="topic-pill">{t}</span>' for t in TOPICS
-) + "</div>"
-st.markdown(pills_html, unsafe_allow_html=True)
-
-with st.sidebar:
-    st.markdown("#### Settings")
-    k = st.slider(
-        "Sources to consult",
-        min_value=4,
-        max_value=20,
-        value=8,
-        help="Higher = broader context, slower response",
-    )
-    st.markdown("---")
-    st.markdown(
-        "**How it works**\n\n"
-        "1. Your question is embedded into a vector\n"
-        "2. The most relevant paper excerpts are retrieved\n"
-        "3. Claude synthesises a cited answer\n\n"
-        "**Corpus:** your Zotero library (951 papers, 46 K excerpts)\n\n"
-        "*Shift + Enter for a new line.*"
-    )
+st.markdown(
+    '<div class="topic-pills">' +
+    "".join(f'<span class="topic-pill">{t}</span>' for t in TOPICS) +
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 if "result" not in st.session_state:
     st.session_state.result = None
@@ -288,7 +261,6 @@ if submitted and query.strip():
         agent_steps = []
 
         with st.status("Agent working…", expanded=True) as status:
-            # Step 1 — scope check
             st.write("Checking whether the question is within the neuroscience corpus…")
             scope = check_scope(q)
 
@@ -302,12 +274,9 @@ if submitted and query.strip():
                 }
             else:
                 st.write("Question is within scope. Retrieving relevant excerpts…")
-
-                # Step 2 — initial retrieval
-                chunks = retrieve(q, k)
+                chunks = retrieve(q, TOP_K)
                 context = build_context(chunks)
 
-                # Step 3 — agent decision
                 st.write("Evaluating context quality…")
                 decision = agent_decide(q, context[:2000])
 
@@ -315,18 +284,17 @@ if submitted and query.strip():
                     ref_q = decision["query"]
                     st.write(f"Context insufficient — reformulating query to: *\"{ref_q}\"*")
                     agent_steps.append({"original": q, "reformulated": ref_q})
-                    new_chunks = retrieve(ref_q, k)
+                    new_chunks = retrieve(ref_q, TOP_K)
                     seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
                     for c in new_chunks:
                         cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
                         if cid not in seen:
                             chunks.append(c)
                             seen.add(cid)
-                    chunks = chunks[:k]
+                    chunks = chunks[:TOP_K]
                 else:
                     st.write("Context quality sufficient.")
 
-                # Step 4 — generate
                 st.write("Generating answer…")
                 gen = generate_answer(q, chunks)
                 status.update(label="Done", state="complete")
@@ -348,13 +316,13 @@ if st.session_state.result:
     result = st.session_state.result
 
     if result.get("out_of_scope"):
-        st.markdown("## Answer")
         st.markdown(
-            '<p style="color:#86868b;font-size:0.83rem;margin-bottom:0.75rem;">'
-            'This question is outside the neuroscience corpus — answered from general knowledge.</p>',
+            f'<div class="out-of-scope-box">'
+            f'<div class="out-of-scope-warning">⚠ Outside corpus — answered from general knowledge</div>'
+            f'<div class="out-of-scope-answer">{result["answer"]}</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(result["answer"])
     else:
         st.markdown("## Answer")
         st.markdown(result["answer"])
@@ -365,40 +333,39 @@ if st.session_state.result:
                 f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
             )
 
-    if not result.get("out_of_scope"):
-     st.markdown("## Quality evaluation")
-    if not result.get("out_of_scope") and st.session_state.ragas_scores is None:
-        if st.button("Run RAGAS evaluation", use_container_width=True):
-            with st.spinner("Evaluating faithfulness and context precision — ~30 s…"):
-                try:
-                    st.session_state.ragas_scores = evaluate_rag(
-                        query=result["query"],
-                        answer=result["answer"],
-                        chunks=result["chunks"],
-                    )
-                except Exception as e:
-                    st.error(f"Evaluation failed: {e}")
+        st.markdown("## Quality evaluation")
+        if st.session_state.ragas_scores is None:
+            if st.button("Run evaluation", use_container_width=True):
+                with st.spinner("Evaluating faithfulness and context precision — ~30 s…"):
+                    try:
+                        st.session_state.ragas_scores = evaluate_rag(
+                            query=result["query"],
+                            answer=result["answer"],
+                            chunks=result["chunks"],
+                        )
+                    except Exception as e:
+                        st.error(f"Evaluation failed: {e}")
 
-    if st.session_state.ragas_scores:
-        scores = st.session_state.ragas_scores
-        col1, col2 = st.columns(2)
-        col1.metric(
-            "Faithfulness",
-            f"{scores['faithfulness']:.2f} / 1.0",
-            help="Are the answer's claims supported by the retrieved excerpts?",
-        )
-        col2.metric(
-            "Context precision",
-            f"{scores['context_precision']:.2f} / 1.0",
-            help="Are the retrieved excerpts relevant to the question?",
-        )
-        if scores.get("faithfulness_reason") or scores.get("context_precision_reason"):
-            st.markdown(
-                f'<p style="color:#86868b;font-size:0.82rem;margin-top:0.5rem;">'
-                f'Faithfulness: {scores["faithfulness_reason"]} &nbsp;·&nbsp; '
-                f'Precision: {scores["context_precision_reason"]}</p>',
-                unsafe_allow_html=True,
+        if st.session_state.ragas_scores:
+            scores = st.session_state.ragas_scores
+            col1, col2 = st.columns(2)
+            col1.metric(
+                "Faithfulness",
+                f"{scores['faithfulness']:.2f} / 1.0",
+                help="Are the answer's claims supported by the retrieved excerpts?",
             )
+            col2.metric(
+                "Context precision",
+                f"{scores['context_precision']:.2f} / 1.0",
+                help="Are the retrieved excerpts relevant to the question?",
+            )
+            if scores.get("faithfulness_reason") or scores.get("context_precision_reason"):
+                st.markdown(
+                    f'<p style="color:#86868b;font-size:0.82rem;margin-top:0.5rem;">'
+                    f'Faithfulness: {scores["faithfulness_reason"]} &nbsp;·&nbsp; '
+                    f'Precision: {scores["context_precision_reason"]}</p>',
+                    unsafe_allow_html=True,
+                )
 
-    with st.expander("Token usage"):
-        st.json(result["usage"])
+        with st.expander("Token usage"):
+            st.json(result["usage"])
