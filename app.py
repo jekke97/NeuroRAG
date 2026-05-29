@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 try:
     for _k, _v in st.secrets.items():
         os.environ.setdefault(_k, str(_v))
-except Exception:
+except FileNotFoundError:
     pass  # running locally — keys come from .env via load_dotenv() in rag.py
 
 from rag import ask, CLAUDE_MODEL
