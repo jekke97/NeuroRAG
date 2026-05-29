@@ -13,7 +13,10 @@ try:
 except FileNotFoundError:
     pass  # running locally — keys come from .env via load_dotenv() in rag.py
 
-from rag import ask, evaluate_rag, CLAUDE_MODEL
+from rag import (
+    retrieve, build_context, check_scope, agent_decide,
+    generate_answer, evaluate_rag, CLAUDE_MODEL, TOP_K,
+)
 
 DAILY_LIMIT = 10
 
@@ -281,32 +284,90 @@ if submitted and query.strip():
         st.error(f"Daily limit of {DAILY_LIMIT} queries reached. Come back tomorrow.")
     else:
         st.session_state.ragas_scores = None
-        with st.spinner("Searching and generating…"):
-            st.session_state.result = ask(query.strip(), k=k)
+        q = query.strip()
+        agent_steps = []
+
+        with st.status("Agent working…", expanded=True) as status:
+            # Step 1 — scope check
+            st.write("Checking whether the question is within the neuroscience corpus…")
+            scope = check_scope(q)
+
+            if not scope.get("in_scope", True):
+                st.write("Question is outside the corpus — answering from general knowledge.")
+                status.update(label="Answered from general knowledge", state="complete")
+                st.session_state.result = {
+                    "query": q, "answer": scope.get("response", ""),
+                    "chunks": [], "citations": [], "usage": {},
+                    "agent_steps": [], "out_of_scope": True,
+                }
+            else:
+                st.write("Question is within scope. Retrieving relevant excerpts…")
+
+                # Step 2 — initial retrieval
+                chunks = retrieve(q, k)
+                context = build_context(chunks)
+
+                # Step 3 — agent decision
+                st.write("Evaluating context quality…")
+                decision = agent_decide(q, context[:2000])
+
+                if decision.get("action") == "reformulate" and decision.get("query"):
+                    ref_q = decision["query"]
+                    st.write(f"Context insufficient — reformulating query to: *\"{ref_q}\"*")
+                    agent_steps.append({"original": q, "reformulated": ref_q})
+                    new_chunks = retrieve(ref_q, k)
+                    seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
+                    for c in new_chunks:
+                        cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
+                        if cid not in seen:
+                            chunks.append(c)
+                            seen.add(cid)
+                    chunks = chunks[:k]
+                else:
+                    st.write("Context quality sufficient.")
+
+                # Step 4 — generate
+                st.write("Generating answer…")
+                gen = generate_answer(q, chunks)
+                status.update(label="Done", state="complete")
+
+                st.session_state.result = {
+                    "query": q, "answer": gen["answer"], "chunks": chunks,
+                    "citations": [
+                        {"idx": i+1, "authors": c["meta"]["authors"],
+                         "year": c["meta"]["year"], "title": c["meta"]["title"],
+                         "filename": c["meta"]["filename"]}
+                        for i, c in enumerate(chunks)
+                    ],
+                    "usage": gen["usage"],
+                    "agent_steps": agent_steps,
+                    "out_of_scope": False,
+                }
 
 if st.session_state.result:
     result = st.session_state.result
 
-    # Agent trace — show if the query was reformulated
-    if result.get("agent_steps"):
-        step = result["agent_steps"][0]
+    if result.get("out_of_scope"):
+        st.markdown("## Answer")
         st.markdown(
-            f'<p style="color:#86868b;font-size:0.83rem;margin-bottom:1.5rem;">'
-            f'↻ Query reformulated to: <em>"{step["reformulated"]}"</em></p>',
+            '<p style="color:#86868b;font-size:0.83rem;margin-bottom:0.75rem;">'
+            'This question is outside the neuroscience corpus — answered from general knowledge.</p>',
             unsafe_allow_html=True,
         )
+        st.markdown(result["answer"])
+    else:
+        st.markdown("## Answer")
+        st.markdown(result["answer"])
 
-    st.markdown("## Answer")
-    st.markdown(result["answer"])
+        st.markdown("## Sources")
+        for c in result["citations"]:
+            st.markdown(
+                f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
+            )
 
-    st.markdown("## Sources")
-    for c in result["citations"]:
-        st.markdown(
-            f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
-        )
-
-    st.markdown("## Quality evaluation")
-    if st.session_state.ragas_scores is None:
+    if not result.get("out_of_scope"):
+     st.markdown("## Quality evaluation")
+    if not result.get("out_of_scope") and st.session_state.ragas_scores is None:
         if st.button("Run RAGAS evaluation", use_container_width=True):
             with st.spinner("Evaluating faithfulness and context precision — ~30 s…"):
                 try:

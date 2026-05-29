@@ -1,5 +1,5 @@
 """
-Core RAG pipeline: query → agent decision → retrieve → generate with Claude.
+Core RAG pipeline: scope check → retrieve → agent decision → generate with Claude.
 Also runnable as CLI: python rag.py "your question here"
 """
 from __future__ import annotations
@@ -24,17 +24,39 @@ Answer questions grounded strictly in the provided literature excerpts.
 Cite sources using their bracket numbers [1], [2], etc. throughout your answer.
 If the provided excerpts do not contain enough information, say so clearly rather than guessing."""
 
-AGENT_SYSTEM = """\
+_SCOPE_SYSTEM = """\
+You are a routing agent for NeuroRAG, a Q&A system over 951 neuroscience research papers.
+The corpus covers: attention, perception, decision-making, reward, dopamine, fMRI, EEG,
+predictive coding, Bayesian inference, working memory, consciousness, and related topics.
+
+Decide whether the question can be meaningfully answered from this corpus.
+
+Reply ONLY with valid JSON — no other text:
+{"in_scope": true}
+  — question relates to neuroscience, cognition, brain function, or clinical neuroscience
+{"in_scope": false, "response": "<concise, helpful answer from your general knowledge>"}
+  — question is off-topic; answer it directly from general knowledge"""
+
+_AGENT_SYSTEM = """\
 You are a search query optimizer for a neuroscience literature database.
 Given a question and the top retrieved excerpts, decide if the context is sufficient.
 
 Reply with ONLY a JSON object — no explanation, no markdown:
 {"action": "answer"}
-  — if the excerpts adequately cover the question topic
+  — excerpts adequately cover the question topic
 {"action": "reformulate", "query": "<improved search query>"}
-  — if the excerpts clearly miss the core topic and a different query would help
+  — excerpts clearly miss the core topic; provide a better query"""
 
-Reformulate only when truly needed."""
+_FAITHFULNESS_SYSTEM = """\
+You are an evaluation judge. Assess whether the claims in an answer are supported by the context.
+Steps: 1) Extract every factual claim from the answer. 2) Check each against the context.
+Score = supported_claims / total_claims.
+Reply with ONLY valid JSON: {"score": <float 0-1>, "supported": <int>, "total": <int>, "reason": "<one sentence>"}"""
+
+_PRECISION_SYSTEM = """\
+You are an evaluation judge. Assess whether the retrieved passages are relevant to the question.
+Steps: 1) For each numbered passage, decide if it helps answer the question. 2) Score = relevant/total.
+Reply with ONLY valid JSON: {"score": <float 0-1>, "relevant": <int>, "total": <int>, "reason": "<one sentence>"}"""
 
 # Lazy singletons
 _embed_model: SentenceTransformer | None = None
@@ -67,6 +89,14 @@ def _claude() -> anthropic.Anthropic:
     return _client
 
 
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    if "```" in text:
+        parts = text.split("```")
+        text = parts[1].lstrip("json").strip() if len(parts) >= 3 else parts[-1].strip()
+    return json.loads(text)
+
+
 def retrieve(query: str, k: int = TOP_K) -> list[dict]:
     vec = _embed().encode([query]).tolist()[0]
     res = _pinecone().query(vector=vec, top_k=k, include_metadata=True)
@@ -86,7 +116,7 @@ def retrieve(query: str, k: int = TOP_K) -> list[dict]:
     ]
 
 
-def _build_context(chunks: list[dict]) -> str:
+def build_context(chunks: list[dict]) -> str:
     parts = []
     for i, c in enumerate(chunks, 1):
         m = c["meta"]
@@ -95,12 +125,27 @@ def _build_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _agent_decide(question: str, context_preview: str) -> dict:
-    """One Claude call: decide whether to answer or reformulate the search query."""
+def check_scope(question: str) -> dict:
+    """Decide whether the question is within the neuroscience corpus scope."""
+    resp = _claude().messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=300,
+        system=_SCOPE_SYSTEM,
+        messages=[{"role": "user", "content": question}],
+    )
+    raw = next((b.text for b in resp.content if b.type == "text"), "")
+    try:
+        return _parse_json(raw)
+    except Exception:
+        return {"in_scope": True}
+
+
+def agent_decide(question: str, context_preview: str) -> dict:
+    """Decide whether current context is sufficient or a better query is needed."""
     resp = _claude().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=120,
-        system=AGENT_SYSTEM,
+        system=_AGENT_SYSTEM,
         messages=[{
             "role": "user",
             "content": f"Question: {question}\n\nTop retrieved excerpts:\n{context_preview}",
@@ -108,36 +153,14 @@ def _agent_decide(question: str, context_preview: str) -> dict:
     )
     raw = next((b.text for b in resp.content if b.type == "text"), "")
     try:
-        return json.loads(raw.strip())
+        return _parse_json(raw)
     except Exception:
         return {"action": "answer"}
 
 
-def ask(query: str, k: int = TOP_K) -> dict:
-    agent_steps = []
-
-    # Step 1: Initial retrieval
-    chunks = retrieve(query, k)
-    context = _build_context(chunks)
-
-    # Step 2: Agent decision — answer or reformulate?
-    decision = _agent_decide(query, context[:2000])
-
-    if decision.get("action") == "reformulate" and decision.get("query"):
-        reformulated = decision["query"]
-        agent_steps.append({"original": query, "reformulated": reformulated})
-
-        new_chunks = retrieve(reformulated, k)
-        seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
-        for c in new_chunks:
-            cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
-            if cid not in seen:
-                chunks.append(c)
-                seen.add(cid)
-        chunks = chunks[:k]
-        context = _build_context(chunks)
-
-    # Step 3: Generate grounded answer
+def generate_answer(query: str, chunks: list[dict]) -> dict:
+    """Generate a grounded answer from retrieved chunks."""
+    context = build_context(chunks)
     response = _claude().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=4096,
@@ -148,68 +171,21 @@ def ask(query: str, k: int = TOP_K) -> dict:
         }],
     )
     answer = next((b.text for b in response.content if b.type == "text"), "")
-
     return {
-        "query":   query,
-        "answer":  answer,
-        "chunks":  chunks,
-        "citations": [
-            {
-                "idx":      i + 1,
-                "authors":  c["meta"]["authors"],
-                "year":     c["meta"]["year"],
-                "title":    c["meta"]["title"],
-                "filename": c["meta"]["filename"],
-            }
-            for i, c in enumerate(chunks)
-        ],
+        "answer": answer,
         "usage": {
             "input_tokens":          response.usage.input_tokens,
             "output_tokens":         response.usage.output_tokens,
             "cache_creation_tokens": response.usage.cache_creation_input_tokens,
             "cache_read_tokens":     response.usage.cache_read_input_tokens,
         },
-        "agent_steps": agent_steps,
     }
 
 
-_FAITHFULNESS_SYSTEM = """\
-You are an evaluation judge. Assess whether the claims in an answer are supported by the provided context.
-
-Steps:
-1. Extract every factual claim from the answer.
-2. For each claim, check whether it is directly supported by the context.
-3. Score = supported_claims / total_claims.
-
-Reply with ONLY valid JSON: {"score": <float 0-1>, "supported": <int>, "total": <int>, "reason": "<one sentence>"}"""
-
-_PRECISION_SYSTEM = """\
-You are an evaluation judge. Assess whether the retrieved passages are relevant to the question.
-
-Steps:
-1. For each numbered passage, decide if it contains information useful for answering the question.
-2. Score = relevant_passages / total_passages.
-
-Reply with ONLY valid JSON: {"score": <float 0-1>, "relevant": <int>, "total": <int>, "reason": "<one sentence>"}"""
-
-
-def _parse_json(text: str) -> dict:
-    """Extract JSON from Claude's response, stripping markdown fences if present."""
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[-2] if text.count("```") >= 2 else text
-        text = text.lstrip("json").strip()
-    return json.loads(text)
-
-
 def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
-    """
-    LLM-as-judge evaluation (RAGAS methodology) using Claude directly.
-    Measures faithfulness and context precision without external dependencies.
-    """
-    context = _build_context(chunks)
+    """LLM-as-judge evaluation: faithfulness + context precision."""
+    context = build_context(chunks)
 
-    # Faithfulness: are the answer's claims grounded in the context?
     faith_resp = _claude().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=200,
@@ -220,9 +196,8 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     try:
         faith = _parse_json(faith_raw)
     except Exception:
-        faith = {"score": 0.0, "reason": f"parse error: {faith_raw[:120]}"}
+        faith = {"score": 0.0, "reason": f"parse error — got: {faith_raw[:80]}"}
 
-    # Context precision: are the retrieved passages relevant to the question?
     prec_resp = _claude().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=200,
@@ -233,13 +208,62 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     try:
         prec = _parse_json(prec_raw)
     except Exception:
-        prec = {"score": 0.0, "reason": f"parse error: {prec_raw[:120]}"}
+        prec = {"score": 0.0, "reason": f"parse error — got: {prec_raw[:80]}"}
 
     return {
-        "faithfulness":      round(float(faith.get("score", 0)), 3),
-        "faithfulness_reason": faith.get("reason", ""),
-        "context_precision": round(float(prec.get("score", 0)), 3),
+        "faithfulness":             round(float(faith.get("score", 0)), 3),
+        "faithfulness_reason":      faith.get("reason", ""),
+        "context_precision":        round(float(prec.get("score", 0)), 3),
         "context_precision_reason": prec.get("reason", ""),
+    }
+
+
+def ask(query: str, k: int = TOP_K) -> dict:
+    """Full pipeline (used by CLI). UI calls the step functions directly for live progress."""
+    agent_steps = []
+
+    scope = check_scope(query)
+    if not scope.get("in_scope", True):
+        return {
+            "query":       query,
+            "answer":      scope.get("response", ""),
+            "chunks":      [],
+            "citations":   [],
+            "usage":       {},
+            "agent_steps": [{"type": "out_of_scope"}],
+            "out_of_scope": True,
+        }
+
+    chunks  = retrieve(query, k)
+    context = build_context(chunks)
+    decision = agent_decide(query, context[:2000])
+
+    if decision.get("action") == "reformulate" and decision.get("query"):
+        reformulated = decision["query"]
+        agent_steps.append({"original": query, "reformulated": reformulated})
+        new_chunks = retrieve(reformulated, k)
+        seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
+        for c in new_chunks:
+            cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
+            if cid not in seen:
+                chunks.append(c)
+                seen.add(cid)
+        chunks = chunks[:k]
+
+    gen = generate_answer(query, chunks)
+
+    return {
+        "query":       query,
+        "answer":      gen["answer"],
+        "chunks":      chunks,
+        "citations":   [
+            {"idx": i+1, "authors": c["meta"]["authors"], "year": c["meta"]["year"],
+             "title": c["meta"]["title"], "filename": c["meta"]["filename"]}
+            for i, c in enumerate(chunks)
+        ],
+        "usage":       gen["usage"],
+        "agent_steps": agent_steps,
+        "out_of_scope": False,
     }
 
 
@@ -249,11 +273,15 @@ if __name__ == "__main__":
     )
     print(f"Query: {query}\n")
     result = ask(query)
-    if result["agent_steps"]:
+    if result.get("out_of_scope"):
+        print("[agent] out of scope — answered from general knowledge")
+    elif result["agent_steps"]:
         print(f"[agent] reformulated → \"{result['agent_steps'][0]['reformulated']}\"")
     print(result["answer"])
-    print("\n--- Sources ---")
-    for c in result["citations"]:
-        print(f"[{c['idx']}] {c['authors']} ({c['year']}) — {c['title']}")
-    u = result["usage"]
-    print(f"\nTokens — input: {u['input_tokens']}, output: {u['output_tokens']}")
+    if result["citations"]:
+        print("\n--- Sources ---")
+        for c in result["citations"]:
+            print(f"[{c['idx']}] {c['authors']} ({c['year']}) — {c['title']}")
+    u = result.get("usage", {})
+    if u:
+        print(f"\nTokens — input: {u['input_tokens']}, output: {u['output_tokens']}")
