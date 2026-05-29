@@ -193,6 +193,15 @@ Steps:
 Reply with ONLY valid JSON: {"score": <float 0-1>, "relevant": <int>, "total": <int>, "reason": "<one sentence>"}"""
 
 
+def _parse_json(text: str) -> dict:
+    """Extract JSON from Claude's response, stripping markdown fences if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[-2] if text.count("```") >= 2 else text
+        text = text.lstrip("json").strip()
+    return json.loads(text)
+
+
 def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     """
     LLM-as-judge evaluation (RAGAS methodology) using Claude directly.
@@ -209,9 +218,9 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     )
     faith_raw = next((b.text for b in faith_resp.content if b.type == "text"), "")
     try:
-        faith = json.loads(faith_raw.strip())
+        faith = _parse_json(faith_raw)
     except Exception:
-        faith = {"score": 0.0, "reason": "parse error"}
+        faith = {"score": 0.0, "reason": f"parse error: {faith_raw[:120]}"}
 
     # Context precision: are the retrieved passages relevant to the question?
     prec_resp = _claude().messages.create(
@@ -222,9 +231,9 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     )
     prec_raw = next((b.text for b in prec_resp.content if b.type == "text"), "")
     try:
-        prec = json.loads(prec_raw.strip())
+        prec = _parse_json(prec_raw)
     except Exception:
-        prec = {"score": 0.0, "reason": "parse error"}
+        prec = {"score": 0.0, "reason": f"parse error: {prec_raw[:120]}"}
 
     return {
         "faithfulness":      round(float(faith.get("score", 0)), 3),
