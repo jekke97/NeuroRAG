@@ -187,23 +187,49 @@ h2 {
 
 hr { border: none !important; border-top: 1px solid #2c2c2e !important; }
 
-/* Green LLM-as-judge button */
-[data-testid="stBaseButton-primary"] > button,
-[data-testid="stButton"] > button {
-    background: #30d158 !important;
-    color: #000000 !important;
-    border: none !important;
-    border-radius: 980px !important;
-    padding: 0.6rem 2rem !important;
-    font-size: 0.95rem !important;
-    font-weight: 500 !important;
-    letter-spacing: -0.01em !important;
-    width: 100% !important;
-    transition: opacity 0.15s ease !important;
-    cursor: pointer !important;
+/* LLM-as-judge evaluation box */
+.eval-box {
+    border: 1.5px solid #30d158;
+    border-radius: 14px;
+    background: rgba(48, 209, 88, 0.07);
+    padding: 18px 22px;
+    margin-top: 1.5rem;
 }
-[data-testid="stBaseButton-primary"] > button:hover,
-[data-testid="stButton"] > button:hover { opacity: 0.8 !important; }
+.eval-label {
+    color: #30d158;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+.eval-scores {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 10px;
+}
+.eval-score-item { }
+.eval-score-name {
+    color: #86868b;
+    font-size: 0.75rem;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+.eval-score-value {
+    color: #f5f5f7;
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+.eval-reasons {
+    color: #86868b;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    border-top: 1px solid rgba(48, 209, 88, 0.2);
+    padding-top: 10px;
+    margin-top: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -314,8 +340,16 @@ if submitted and query.strip():
 
                 st.write("Generating answer…")
                 gen = generate_answer(q, chunks)
+
+                st.write("Validating answer quality (LLM-as-judge)…")
+                try:
+                    scores = evaluate_rag(q, gen["answer"], chunks)
+                except Exception:
+                    scores = None
+
                 status.update(label="Done", state="complete")
 
+                st.session_state.ragas_scores = scores
                 st.session_state.result = {
                     "query": q, "answer": gen["answer"], "chunks": chunks,
                     "citations": [
@@ -350,37 +384,25 @@ if st.session_state.result:
                 f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
             )
 
-        st.markdown("## Quality evaluation")
-        if st.session_state.ragas_scores is None:
-            if st.button("Validate answer · LLM-as-judge", use_container_width=True, type="primary"):
-                with st.spinner("Running LLM-as-judge evaluation — ~30 s…"):
-                    try:
-                        st.session_state.ragas_scores = evaluate_rag(
-                            query=result["query"],
-                            answer=result["answer"],
-                            chunks=result["chunks"],
-                        )
-                    except Exception as e:
-                        st.error(f"Evaluation failed: {e}")
-
         if st.session_state.ragas_scores:
             scores = st.session_state.ragas_scores
-            col1, col2 = st.columns(2)
-            col1.metric(
-                "Faithfulness",
-                f"{scores['faithfulness']:.2f} / 1.0",
-                help="Are the answer's claims supported by the retrieved excerpts?",
+            st.markdown(
+                f'<div class="eval-box">'
+                f'<div class="eval-label">✓ LLM-as-judge validation</div>'
+                f'<div class="eval-scores">'
+                f'  <div class="eval-score-item">'
+                f'    <div class="eval-score-name">Faithfulness</div>'
+                f'    <div class="eval-score-value">{scores["faithfulness"]:.2f}<span style="font-size:0.9rem;color:#86868b;font-weight:400"> / 1.0</span></div>'
+                f'  </div>'
+                f'  <div class="eval-score-item">'
+                f'    <div class="eval-score-name">Context precision</div>'
+                f'    <div class="eval-score-value">{scores["context_precision"]:.2f}<span style="font-size:0.9rem;color:#86868b;font-weight:400"> / 1.0</span></div>'
+                f'  </div>'
+                f'</div>'
+                f'<div class="eval-reasons">'
+                f'{scores.get("faithfulness_reason", "")} &nbsp;·&nbsp; {scores.get("context_precision_reason", "")}'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            col2.metric(
-                "Context precision",
-                f"{scores['context_precision']:.2f} / 1.0",
-                help="Are the retrieved excerpts relevant to the question?",
-            )
-            if scores.get("faithfulness_reason") or scores.get("context_precision_reason"):
-                st.markdown(
-                    f'<p style="color:#86868b;font-size:0.82rem;margin-top:0.5rem;">'
-                    f'Faithfulness: {scores["faithfulness_reason"]} &nbsp;·&nbsp; '
-                    f'Precision: {scores["context_precision_reason"]}</p>',
-                    unsafe_allow_html=True,
-                )
 
