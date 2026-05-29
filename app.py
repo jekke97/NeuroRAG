@@ -3,6 +3,7 @@ Streamlit UI for NeuroRAG.
 Run with: streamlit run app.py
 """
 import os
+from datetime import date
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -13,6 +14,30 @@ except FileNotFoundError:
     pass  # running locally — keys come from .env via load_dotenv() in rag.py
 
 from rag import ask, CLAUDE_MODEL
+
+DAILY_LIMIT = 10
+
+@st.cache_resource
+def _rate_store() -> dict:
+    return {}
+
+def _client_ip() -> str:
+    try:
+        forwarded = st.context.headers.get("X-Forwarded-For", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return st.context.headers.get("X-Real-Ip", "local")
+    except Exception:
+        return "local"
+
+def _rate_limit_ok() -> bool:
+    store = _rate_store()
+    key = f"{_client_ip()}:{date.today().isoformat()}"
+    count = store.get(key, 0)
+    if count >= DAILY_LIMIT:
+        return False
+    store[key] = count + 1
+    return True
 
 st.set_page_config(
     page_title="NeuroRAG",
@@ -250,8 +275,11 @@ with st.form("query_form"):
     submitted = st.form_submit_button("Ask", use_container_width=True)
 
 if submitted and query.strip():
-    with st.spinner("Searching and generating…"):
-        st.session_state.result = ask(query.strip(), k=k)
+    if not _rate_limit_ok():
+        st.error(f"Daily limit of {DAILY_LIMIT} queries reached. Come back tomorrow.")
+    else:
+        with st.spinner("Searching and generating…"):
+            st.session_state.result = ask(query.strip(), k=k)
 
 if st.session_state.result:
     result = st.session_state.result
