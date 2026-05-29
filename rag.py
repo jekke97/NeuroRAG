@@ -173,42 +173,64 @@ def ask(query: str, k: int = TOP_K) -> dict:
     }
 
 
+_FAITHFULNESS_SYSTEM = """\
+You are an evaluation judge. Assess whether the claims in an answer are supported by the provided context.
+
+Steps:
+1. Extract every factual claim from the answer.
+2. For each claim, check whether it is directly supported by the context.
+3. Score = supported_claims / total_claims.
+
+Reply with ONLY valid JSON: {"score": <float 0-1>, "supported": <int>, "total": <int>, "reason": "<one sentence>"}"""
+
+_PRECISION_SYSTEM = """\
+You are an evaluation judge. Assess whether the retrieved passages are relevant to the question.
+
+Steps:
+1. For each numbered passage, decide if it contains information useful for answering the question.
+2. Score = relevant_passages / total_passages.
+
+Reply with ONLY valid JSON: {"score": <float 0-1>, "relevant": <int>, "total": <int>, "reason": "<one sentence>"}"""
+
+
 def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     """
-    RAGAS evaluation: faithfulness + context precision.
-    Lazy-imported so the app loads without ragas if evaluation isn't triggered.
+    LLM-as-judge evaluation (RAGAS methodology) using Claude directly.
+    Measures faithfulness and context precision without external dependencies.
     """
-    from ragas import EvaluationDataset, SingleTurnSample, evaluate
-    from ragas.metrics import Faithfulness, LLMContextPrecisionWithoutReference
-    from ragas.llms import LangchainLLMWrapper
-    from langchain_anthropic import ChatAnthropic
+    context = _build_context(chunks)
 
-    llm = LangchainLLMWrapper(
-        ChatAnthropic(
-            model=CLAUDE_MODEL,
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
-        )
+    # Faithfulness: are the answer's claims grounded in the context?
+    faith_resp = _claude().messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=200,
+        system=_FAITHFULNESS_SYSTEM,
+        messages=[{"role": "user", "content": f"Context:\n{context}\n\nAnswer:\n{answer}"}],
     )
+    faith_raw = next((b.text for b in faith_resp.content if b.type == "text"), "")
+    try:
+        faith = json.loads(faith_raw.strip())
+    except Exception:
+        faith = {"score": 0.0, "reason": "parse error"}
 
-    sample = SingleTurnSample(
-        user_input=query,
-        response=answer,
-        retrieved_contexts=[c["text"] for c in chunks],
+    # Context precision: are the retrieved passages relevant to the question?
+    prec_resp = _claude().messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=200,
+        system=_PRECISION_SYSTEM,
+        messages=[{"role": "user", "content": f"Question: {query}\n\nPassages:\n{context}"}],
     )
+    prec_raw = next((b.text for b in prec_resp.content if b.type == "text"), "")
+    try:
+        prec = json.loads(prec_raw.strip())
+    except Exception:
+        prec = {"score": 0.0, "reason": "parse error"}
 
-    result = evaluate(
-        dataset=EvaluationDataset(samples=[sample]),
-        metrics=[
-            Faithfulness(llm=llm),
-            LLMContextPrecisionWithoutReference(llm=llm),
-        ],
-    )
-
-    df = result.to_pandas()
-    row = df.iloc[0].to_dict()
     return {
-        "faithfulness":       round(float(row.get("faithfulness", 0)), 3),
-        "context_precision":  round(float(row.get("llm_context_precision_without_reference", 0)), 3),
+        "faithfulness":      round(float(faith.get("score", 0)), 3),
+        "faithfulness_reason": faith.get("reason", ""),
+        "context_precision": round(float(prec.get("score", 0)), 3),
+        "context_precision_reason": prec.get("reason", ""),
     }
 
 

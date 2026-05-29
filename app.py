@@ -324,13 +324,20 @@ if st.session_state.result:
         col1.metric(
             "Faithfulness",
             f"{scores['faithfulness']:.2f} / 1.0",
-            help="How well every claim in the answer is supported by the retrieved excerpts",
+            help="Are the answer's claims supported by the retrieved excerpts?",
         )
         col2.metric(
             "Context precision",
             f"{scores['context_precision']:.2f} / 1.0",
-            help="How relevant the retrieved excerpts are to the question",
+            help="Are the retrieved excerpts relevant to the question?",
         )
+        if scores.get("faithfulness_reason") or scores.get("context_precision_reason"):
+            st.markdown(
+                f'<p style="color:#86868b;font-size:0.82rem;margin-top:0.5rem;">'
+                f'Faithfulness: {scores["faithfulness_reason"]} &nbsp;·&nbsp; '
+                f'Precision: {scores["context_precision_reason"]}</p>',
+                unsafe_allow_html=True,
+            )
 
     with st.expander("Token usage"):
         st.json(result["usage"])

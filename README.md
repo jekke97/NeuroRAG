@@ -71,7 +71,7 @@ Every answer can be evaluated on demand using [RAGAS](https://docs.ragas.io), an
 | **Faithfulness** | Are the claims in the answer actually supported by the retrieved excerpts? Detects hallucination. |
 | **Context precision** | Are the retrieved excerpts relevant to the question? Measures retrieval quality. |
 
-Both are LLM-judged (0–1 scale) and run against the same Claude model used for generation, keeping the evaluation stack self-contained.
+Both are implemented as **LLM-as-judge** prompts sent to Claude — the same methodology RAGAS uses internally — keeping the evaluation stack self-contained with no additional dependencies.
 
 ---
 
