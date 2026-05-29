@@ -2,7 +2,7 @@
 
 **Proof of concept** — an end-to-end RAG pipeline over a real neuroscience PhD library. Ask questions in natural language, get cited answers grounded in the literature.
 
-🔗 **[Live demo](https://jekke97-neurorag-app-xyz.streamlit.app)** ← replace with your actual URL
+🔗 **[Live demo](https://myneurorag.streamlit.app)**
 
 ---
 
