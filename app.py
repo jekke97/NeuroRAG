@@ -216,11 +216,10 @@ st.title("NeuroRAG")
 
 st.markdown(
     '<div class="nr-description">'
-    'Ask any question. An <strong>agent</strong> first decides whether it belongs to the '
-    'neuroscience corpus — if so, the most relevant excerpts from 951 papers are retrieved '
-    'and Claude synthesises a cited answer (<strong>RAG</strong>). Off-topic questions are '
-    'answered from general knowledge and flagged clearly. When the initial retrieval misses '
-    'the target, the agent <strong>reformulates the search query automatically</strong>.'
+    '<strong>Proof of concept</strong> · end-to-end RAG over a real neuroscience PhD library.<br>'
+    'Ask a question — an agent retrieves the most relevant excerpts from 951 research papers '
+    'and generates a grounded, cited answer. Off-topic questions are answered from general '
+    'knowledge and flagged. Queries are reformulated automatically when retrieval falls short.'
     '</div>',
     unsafe_allow_html=True,
 )
