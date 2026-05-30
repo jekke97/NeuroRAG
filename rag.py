@@ -1,5 +1,6 @@
 """
 Core RAG pipeline: scope check → retrieve → agent decision → generate with Claude.
+Supports multiple Pinecone namespaces (neurorag, philips, both).
 Also runnable as CLI: python rag.py "your question here"
 """
 from __future__ import annotations
@@ -13,34 +14,38 @@ import anthropic
 
 load_dotenv()
 
-INDEX_NAME   = "neurorag"
+INDEX_NAME         = "neurorag"
+NAMESPACE_NEURORAG = "neurorag"
+NAMESPACE_PHILIPS  = "philips"
+
 EMBED_MODEL  = "all-MiniLM-L6-v2"
 CLAUDE_MODEL = "claude-haiku-4-5"
 TOP_K        = 8
 
 SYSTEM = """\
-You are NeuroRAG, a scientific assistant specializing in neuroscience and cognitive science.
+You are NeuroRAG, a scientific assistant specializing in neuroscience and medical imaging.
 Answer questions grounded strictly in the provided literature excerpts.
 Cite sources using their bracket numbers [1], [2], etc. throughout your answer.
 If the provided excerpts do not contain enough information, say so clearly rather than guessing."""
 
-_SCOPE_SYSTEM = """\
-You are a routing agent for NeuroRAG, a Q&A system over 951 neuroscience research papers.
-The corpus covers: attention, perception, decision-making, reward, dopamine, fMRI, EEG,
-predictive coding, Bayesian inference, working memory, consciousness, and related topics.
-
-Decide whether the question can be meaningfully answered from this corpus.
-
-Reply ONLY with valid JSON — no other text:
-{"in_scope": true}
-  — question relates to neuroscience, cognition, brain function, or clinical neuroscience
-{"in_scope": false, "response": "<concise, helpful answer from your general knowledge>"}
-  — question is off-topic; answer it directly from general knowledge"""
+_SCOPE_CONTEXTS = {
+    NAMESPACE_NEURORAG: (
+        "951 neuroscience research papers covering attention, perception, decision-making, "
+        "reward, fMRI, EEG, predictive coding, Bayesian inference, working memory, and related topics"
+    ),
+    NAMESPACE_PHILIPS: (
+        "Philips-affiliated MRI and fMRI research papers covering medical imaging, scanner "
+        "technology, acquisition sequences, image reconstruction, and clinical neuroimaging"
+    ),
+    "both": (
+        "neuroscience research papers AND Philips medical imaging research papers, "
+        "covering brain function, cognition, MRI/fMRI methodology, and clinical neuroimaging"
+    ),
+}
 
 _AGENT_SYSTEM = """\
-You are a search query optimizer for a neuroscience literature database.
+You are a search query optimizer for a scientific literature database.
 Given a question and the top retrieved excerpts, decide if the context is sufficient.
-
 Reply with ONLY a JSON object — no explanation, no markdown:
 {"action": "answer"}
   — excerpts adequately cover the question topic
@@ -97,9 +102,9 @@ def _parse_json(text: str) -> dict:
     return json.loads(text)
 
 
-def retrieve(query: str, k: int = TOP_K) -> list[dict]:
+def retrieve(query: str, k: int = TOP_K, namespace: str = NAMESPACE_NEURORAG) -> list[dict]:
     vec = _embed().encode([query]).tolist()[0]
-    res = _pinecone().query(vector=vec, top_k=k, include_metadata=True)
+    res = _pinecone().query(vector=vec, top_k=k, include_metadata=True, namespace=namespace)
     return [
         {
             "text": match["metadata"].get("text", ""),
@@ -109,11 +114,21 @@ def retrieve(query: str, k: int = TOP_K) -> list[dict]:
                 "title":    match["metadata"].get("title", ""),
                 "filename": match["metadata"].get("filename", ""),
                 "chunk":    match["metadata"].get("chunk", 0),
+                "source":   match["metadata"].get("source", namespace),
+                "doi":      match["metadata"].get("doi", ""),
             },
             "dist": match["score"],
         }
         for match in res["matches"]
     ]
+
+
+def retrieve_merged(query: str, k: int = TOP_K) -> list[dict]:
+    """Query both namespaces, merge by score, return top-K."""
+    a = retrieve(query, k, NAMESPACE_NEURORAG)
+    b = retrieve(query, k, NAMESPACE_PHILIPS)
+    merged = sorted(a + b, key=lambda c: c["dist"], reverse=True)
+    return merged[:k]
 
 
 def build_context(chunks: list[dict]) -> str:
@@ -125,12 +140,22 @@ def build_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def check_scope(question: str) -> dict:
-    """Decide whether the question is within the neuroscience corpus scope."""
+def check_scope(question: str, namespace: str = NAMESPACE_NEURORAG) -> dict:
+    """Decide whether the question is within corpus scope."""
+    corpus_desc = _SCOPE_CONTEXTS.get(namespace, _SCOPE_CONTEXTS[NAMESPACE_NEURORAG])
+    system = (
+        f"You are a routing agent for a Q&A system over {corpus_desc}.\n\n"
+        "Decide if the question can be meaningfully answered from this corpus.\n\n"
+        "Reply ONLY with valid JSON:\n"
+        '{"in_scope": true}\n'
+        "  — question relates to the corpus topics\n"
+        '{"in_scope": false, "response": "<concise helpful answer from general knowledge>"}\n'
+        "  — question is off-topic; answer it directly"
+    )
     resp = _claude().messages.create(
         model=CLAUDE_MODEL,
         max_tokens=300,
-        system=_SCOPE_SYSTEM,
+        system=system,
         messages=[{"role": "user", "content": question}],
     )
     raw = next((b.text for b in resp.content if b.type == "text"), "")
@@ -159,7 +184,6 @@ def agent_decide(question: str, context_preview: str) -> dict:
 
 
 def generate_answer(query: str, chunks: list[dict]) -> dict:
-    """Generate a grounded answer from retrieved chunks."""
     context = build_context(chunks)
     response = _claude().messages.create(
         model=CLAUDE_MODEL,
@@ -187,9 +211,7 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     context = build_context(chunks)
 
     faith_resp = _claude().messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=200,
-        system=_FAITHFULNESS_SYSTEM,
+        model=CLAUDE_MODEL, max_tokens=200, system=_FAITHFULNESS_SYSTEM,
         messages=[{"role": "user", "content": f"Context:\n{context}\n\nAnswer:\n{answer}"}],
     )
     faith_raw = next((b.text for b in faith_resp.content if b.type == "text"), "")
@@ -199,9 +221,7 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
         faith = {"score": 0.0, "reason": f"parse error — got: {faith_raw[:80]}"}
 
     prec_resp = _claude().messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=200,
-        system=_PRECISION_SYSTEM,
+        model=CLAUDE_MODEL, max_tokens=200, system=_PRECISION_SYSTEM,
         messages=[{"role": "user", "content": f"Question: {query}\n\nPassages:\n{context}"}],
     )
     prec_raw = next((b.text for b in prec_resp.content if b.type == "text"), "")
@@ -218,30 +238,26 @@ def evaluate_rag(query: str, answer: str, chunks: list[dict]) -> dict:
     }
 
 
-def ask(query: str, k: int = TOP_K) -> dict:
-    """Full pipeline (used by CLI). UI calls the step functions directly for live progress."""
+def ask(query: str, k: int = TOP_K, namespace: str = NAMESPACE_NEURORAG) -> dict:
+    """Full pipeline (used by CLI). UI calls step functions directly for live progress."""
     agent_steps = []
 
-    scope = check_scope(query)
+    scope = check_scope(query, namespace)
     if not scope.get("in_scope", True):
         return {
-            "query":       query,
-            "answer":      scope.get("response", ""),
-            "chunks":      [],
-            "citations":   [],
-            "usage":       {},
-            "agent_steps": [{"type": "out_of_scope"}],
-            "out_of_scope": True,
+            "query": query, "answer": scope.get("response", ""),
+            "chunks": [], "citations": [], "usage": {},
+            "agent_steps": [], "out_of_scope": True,
         }
 
-    chunks  = retrieve(query, k)
+    chunks = retrieve_merged(query, k) if namespace == "both" else retrieve(query, k, namespace)
     context = build_context(chunks)
     decision = agent_decide(query, context[:2000])
 
     if decision.get("action") == "reformulate" and decision.get("query"):
         reformulated = decision["query"]
         agent_steps.append({"original": query, "reformulated": reformulated})
-        new_chunks = retrieve(reformulated, k)
+        new_chunks = retrieve_merged(reformulated, k) if namespace == "both" else retrieve(reformulated, k, namespace)
         seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
         for c in new_chunks:
             cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
@@ -253,12 +269,13 @@ def ask(query: str, k: int = TOP_K) -> dict:
     gen = generate_answer(query, chunks)
 
     return {
-        "query":       query,
-        "answer":      gen["answer"],
-        "chunks":      chunks,
-        "citations":   [
+        "query":  query,
+        "answer": gen["answer"],
+        "chunks": chunks,
+        "citations": [
             {"idx": i+1, "authors": c["meta"]["authors"], "year": c["meta"]["year"],
-             "title": c["meta"]["title"], "filename": c["meta"]["filename"]}
+             "title": c["meta"]["title"], "filename": c["meta"]["filename"],
+             "source": c["meta"].get("source", namespace), "doi": c["meta"].get("doi", "")}
             for i, c in enumerate(chunks)
         ],
         "usage":       gen["usage"],
@@ -281,7 +298,4 @@ if __name__ == "__main__":
     if result["citations"]:
         print("\n--- Sources ---")
         for c in result["citations"]:
-            print(f"[{c['idx']}] {c['authors']} ({c['year']}) — {c['title']}")
-    u = result.get("usage", {})
-    if u:
-        print(f"\nTokens — input: {u['input_tokens']}, output: {u['output_tokens']}")
+            print(f"[{c['idx']}] {c['authors']} ({c['year']}) — {c['title']} [{c['source']}]")

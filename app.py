@@ -14,8 +14,9 @@ except FileNotFoundError:
     pass  # running locally — keys come from .env via load_dotenv() in rag.py
 
 from rag import (
-    retrieve, build_context, check_scope, agent_decide,
+    retrieve, retrieve_merged, build_context, check_scope, agent_decide,
     generate_answer, evaluate_rag, CLAUDE_MODEL, TOP_K,
+    NAMESPACE_NEURORAG, NAMESPACE_PHILIPS,
 )
 
 DAILY_LIMIT = 10
@@ -187,6 +188,50 @@ h2 {
 
 hr { border: none !important; border-top: 1px solid #2c2c2e !important; }
 
+/* Corpus selector — segmented control */
+[data-testid="stRadio"] > div {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 4px !important;
+    background: #1c1c1e !important;
+    border: 1px solid #3a3a3c !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    width: fit-content !important;
+    margin-bottom: 1.5rem !important;
+}
+[data-testid="stRadio"] label {
+    border-radius: 8px !important;
+    padding: 6px 16px !important;
+    font-size: 0.83rem !important;
+    font-weight: 500 !important;
+    color: #86868b !important;
+    cursor: pointer !important;
+    transition: background 0.15s ease, color 0.15s ease !important;
+    white-space: nowrap !important;
+}
+[data-testid="stRadio"] label:has(input:checked) {
+    background: #3a3a3c !important;
+    color: #f5f5f7 !important;
+}
+[data-testid="stRadio"] label input { display: none !important; }
+[data-testid="stRadio"] p { margin: 0 !important; }
+
+/* Source badge in citations */
+.src-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 1px 8px;
+    border-radius: 980px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.src-neurorag { background: #1c3a5e; color: #5ac8fa; }
+.src-philips  { background: #1a3a2a; color: #30d158; }
+
 /* LLM-as-judge evaluation box */
 .eval-box {
     border: 1.5px solid #30d158;
@@ -281,6 +326,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+_CORPUS_OPTIONS = {
+    "My library": NAMESPACE_NEURORAG,
+    "Philips research": NAMESPACE_PHILIPS,
+    "Both": "both",
+}
+_CORPUS_LABELS = ["My library", "Philips research", "Both"]
+
+selected_corpus = st.radio(
+    "",
+    _CORPUS_LABELS,
+    horizontal=True,
+    label_visibility="collapsed",
+)
+namespace = _CORPUS_OPTIONS[selected_corpus]
+
 if "result" not in st.session_state:
     st.session_state.result = None
 if "ragas_scores" not in st.session_state:
@@ -303,9 +363,10 @@ if submitted and query.strip():
         q = query.strip()
         agent_steps = []
 
+        _corpus_label = selected_corpus
         with st.status("Agent working…", expanded=True) as status:
-            st.write("Checking whether the question is within the neuroscience corpus…")
-            scope = check_scope(q)
+            st.write(f"Corpus: **{_corpus_label}** — checking whether the question is within scope…")
+            scope = check_scope(q, namespace)
 
             if not scope.get("in_scope", True):
                 st.write("Question is outside the corpus — answering from general knowledge.")
@@ -317,7 +378,10 @@ if submitted and query.strip():
                 }
             else:
                 st.write("Question is within scope. Retrieving relevant excerpts…")
-                chunks = retrieve(q, TOP_K)
+                if namespace == "both":
+                    chunks = retrieve_merged(q, TOP_K)
+                else:
+                    chunks = retrieve(q, TOP_K, namespace)
                 context = build_context(chunks)
 
                 st.write("Evaluating context quality…")
@@ -327,7 +391,10 @@ if submitted and query.strip():
                     ref_q = decision["query"]
                     st.write(f"Context insufficient — reformulating query to: *\"{ref_q}\"*")
                     agent_steps.append({"original": q, "reformulated": ref_q})
-                    new_chunks = retrieve(ref_q, TOP_K)
+                    if namespace == "both":
+                        new_chunks = retrieve_merged(ref_q, TOP_K)
+                    else:
+                        new_chunks = retrieve(ref_q, TOP_K, namespace)
                     seen = {f"{c['meta']['filename']}::{c['meta']['chunk']}" for c in chunks}
                     for c in new_chunks:
                         cid = f"{c['meta']['filename']}::{c['meta']['chunk']}"
@@ -355,12 +422,15 @@ if submitted and query.strip():
                     "citations": [
                         {"idx": i+1, "authors": c["meta"]["authors"],
                          "year": c["meta"]["year"], "title": c["meta"]["title"],
-                         "filename": c["meta"]["filename"]}
+                         "filename": c["meta"]["filename"],
+                         "source": c["meta"].get("source", namespace),
+                         "doi": c["meta"].get("doi", "")}
                         for i, c in enumerate(chunks)
                     ],
                     "usage": gen["usage"],
                     "agent_steps": agent_steps,
                     "out_of_scope": False,
+                    "namespace": namespace,
                 }
 
 if st.session_state.result:
@@ -379,9 +449,21 @@ if st.session_state.result:
         st.markdown(result["answer"])
 
         st.markdown("## Sources")
+        show_badge = result.get("namespace") == "both"
         for c in result["citations"]:
+            badge = ""
+            if show_badge:
+                src = c.get("source", "")
+                if src == "philips":
+                    badge = '<span class="src-badge src-philips">Philips</span>'
+                else:
+                    badge = '<span class="src-badge src-neurorag">Library</span>'
+            doi_link = f' · <a href="https://doi.org/{c["doi"]}" target="_blank" style="color:#86868b;font-size:0.82rem;">DOI</a>' if c.get("doi") else ""
             st.markdown(
-                f"**[{c['idx']}]** {c['authors']} ({c['year']}) — *{c['title']}*"
+                f'<p style="margin:0.3rem 0;color:#e5e5ea;font-size:0.95rem;">'
+                f'<strong>[{c["idx"]}]</strong> {c["authors"]} ({c["year"]}) — <em>{c["title"]}</em>'
+                f'{badge}{doi_link}</p>',
+                unsafe_allow_html=True,
             )
 
         if st.session_state.ragas_scores:

@@ -16,6 +16,7 @@ load_dotenv()
 
 DRIVE_PATH    = "/Users/ettore/Library/CloudStorage/GoogleDrive-ettorecerracchio@gmail.com/My Drive/IMCN/Zotero"
 INDEX_NAME    = "neurorag"
+NAMESPACE     = "neurorag"
 EMBED_MODEL   = "all-MiniLM-L6-v2"
 EMBED_DIM     = 384
 CHUNK_SIZE    = 300   # words — fits within all-MiniLM-L6-v2's ~256-token window
@@ -69,21 +70,22 @@ def main():
 
     pc = Pinecone(api_key=api_key)
 
-    # Always delete and recreate for a clean ingest
     existing = [idx.name for idx in pc.list_indexes()]
-    if INDEX_NAME in existing:
-        print(f"Deleting existing index '{INDEX_NAME}' for fresh ingest…")
-        pc.delete_index(INDEX_NAME)
-    print(f"Creating Pinecone index '{INDEX_NAME}'…")
-    pc.create_index(
-        name=INDEX_NAME,
-        dimension=EMBED_DIM,
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-    )
-    print("Index created.")
+    if INDEX_NAME not in existing:
+        print(f"Creating Pinecone index '{INDEX_NAME}'…")
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=EMBED_DIM,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        )
+        print("Index created.")
 
     index = pc.Index(INDEX_NAME)
+
+    # Clear only the neurorag namespace so the philips namespace is untouched
+    print(f"Clearing namespace '{NAMESPACE}' for fresh ingest…")
+    index.delete(delete_all=True, namespace=NAMESPACE)
 
     # Collect all chunks
     all_ids, all_texts, all_metas = [], [], []
@@ -116,10 +118,11 @@ def main():
             {"id": vid, "values": vec, "metadata": meta}
             for vid, vec, meta in zip(batch_ids, embeddings, batch_metas)
         ]
-        index.upsert(vectors=vectors)
+        index.upsert(vectors=vectors, namespace=NAMESPACE)
 
     stats = index.describe_index_stats()
-    print(f"\n✓ Done. {stats['total_vector_count']} vectors in Pinecone index '{INDEX_NAME}'")
+    ns_count = stats.get("namespaces", {}).get(NAMESPACE, {}).get("vector_count", len(all_ids))
+    print(f"\n✓ Done. {ns_count} vectors in namespace '{NAMESPACE}'")
 
 
 if __name__ == "__main__":
