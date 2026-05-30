@@ -336,6 +336,7 @@ _CORPUS_LABELS = ["My library", "Philips research", "Both"]
 selected_corpus = st.radio(
     "",
     _CORPUS_LABELS,
+    index=1,
     horizontal=True,
     label_visibility="collapsed",
 )

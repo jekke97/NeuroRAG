@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import fitz  # pymupdf
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
+from pinecone.errors.exceptions import NotFoundError as PineconeNotFoundError
 from tqdm import tqdm
 
 load_dotenv()
@@ -85,7 +86,10 @@ def main():
 
     # Clear only the neurorag namespace so the philips namespace is untouched
     print(f"Clearing namespace '{NAMESPACE}' for fresh ingest…")
-    index.delete(delete_all=True, namespace=NAMESPACE)
+    try:
+        index.delete(delete_all=True, namespace=NAMESPACE)
+    except PineconeNotFoundError:
+        pass  # namespace doesn't exist yet — nothing to clear
 
     # Collect all chunks
     all_ids, all_texts, all_metas = [], [], []

@@ -1,6 +1,6 @@
 # NeuroRAG
 
-**Proof of concept** — an end-to-end RAG pipeline over a real neuroscience PhD library. Ask questions in natural language, get cited answers grounded in the literature.
+**Proof of concept** — an end-to-end agentic RAG pipeline over two real scientific corpora: a personal neuroscience PhD library and a corpus of Philips-affiliated MRI/fMRI research papers scraped from PubMed.
 
 🔗 **[Live demo](https://myneurorag.streamlit.app)**
 
@@ -8,14 +8,14 @@
 
 ## What it does
 
-You type a question — *"What does the literature say about dopamine and reward prediction errors?"* — and NeuroRAG:
+You select a corpus, type a question, and NeuroRAG:
 
 1. Embeds your query into a vector using `all-MiniLM-L6-v2`
-2. An **agent** evaluates whether the retrieved context is sufficient, or reformulates the search query for a better retrieval
-3. Retrieves the most semantically relevant excerpts from 951 neuroscience papers (46,000+ chunks) stored in Pinecone
-4. Passes them to Claude as grounded context
-5. Returns a synthesised answer with inline citations
-6. Optionally runs **RAGAS** evaluation to score faithfulness and context precision
+2. Checks whether the question is within the corpus scope (out-of-scope questions are answered from general knowledge and flagged)
+3. Retrieves the most semantically relevant excerpts from the selected Pinecone namespace
+4. An **agent** evaluates whether the retrieved context is sufficient, or reformulates the search query for better retrieval
+5. Passes the excerpts to Claude as grounded context and returns a cited answer
+6. Automatically runs **LLM-as-judge** evaluation to score faithfulness and context precision
 
 No hallucination of sources — every claim is traceable to a real paper in the corpus.
 
@@ -27,23 +27,23 @@ No hallucination of sources — every claim is traceable to a real paper in the 
 User query
     │
     ▼
+Scope check (Claude)  ──►  out of scope? → answer from general knowledge (flagged)
+    │ in scope
+    ▼
 Sentence Transformer (all-MiniLM-L6-v2)
     │  384-dim vector
     ▼
-Pinecone vector index  ──►  Top-K relevant chunks + metadata
-    │
+Pinecone  ──►  namespace: "philips" | "neurorag" | merged (both)
+    │           Top-K relevant chunks + metadata
     ▼
 Agent (Claude)  ──►  sufficient context? → answer
-                 └──► insufficient?      → reformulate query → re-retrieve → merge chunks
-    │
-    ▼
-Prompt builder  ──►  system prompt + retrieved context + query
+                 └──► insufficient?      → reformulate → re-retrieve → merge
     │
     ▼
 Claude API  ──►  grounded answer with [1][2]... citations
     │
     ▼
-RAGAS evaluator  ──►  faithfulness score · context precision score
+LLM-as-judge  ──►  faithfulness score · context precision score
     │
     ▼
 Streamlit UI
@@ -53,33 +53,39 @@ Streamlit UI
 
 ## Agentic loop
 
-After the initial retrieval, a lightweight Claude call inspects the top chunks and decides:
+Three agent steps run on every query, all visible in the live UI:
 
-- **Answer** — context is relevant, proceed to generation
-- **Reformulate** — the chunks miss the core topic; generate a better search query, re-retrieve, merge both result sets, then generate
-
-This mirrors a pattern used in production RAG systems to handle vocabulary mismatch (the user asks about "fear learning" but the papers use "fear conditioning") and to improve answer quality on multi-facet questions. The reformulation step is shown in the UI when it fires.
+1. **Scope check** — a Claude call decides if the question is within the corpus. Off-topic questions are answered from general knowledge and shown in a red warning box.
+2. **Query reformulation** — after initial retrieval, a second Claude call inspects the top chunks. If they miss the core topic, it generates a better search query, re-retrieves, and merges both result sets.
+3. **LLM-as-judge evaluation** — after generation, two Claude calls score the answer on faithfulness and context precision (RAGAS methodology).
 
 ---
 
-## Evaluation with RAGAS
+## Corpora
 
-Every answer can be evaluated on demand using [RAGAS](https://docs.ragas.io), an open-source framework for RAG quality measurement:
+| Corpus | Source | Papers | Chunks |
+|---|---|---|---|
+| **Philips research** | PubMed (Philips[Affiliation] + MRI/fMRI terms) · PMC full text | 2,093 | ~120,000 |
+| **My library** | Personal Zotero PhD library | 951 | ~46,000 |
+
+The Philips corpus is built by:
+1. `fetch_philips_papers.py` — scrapes PubMed metadata → `philips_papers.csv`
+2. `ingest_philips.py` — fetches full text from PMC (JATS XML) for open-access papers, falls back to abstract, embeds and upserts to Pinecone namespace `philips`
+
+Both corpora live in separate Pinecone namespaces within the same index. The **Both** option merges results from both namespaces, scored by cosine similarity, with source badges on each citation.
+
+---
+
+## Evaluation
+
+Every answer is automatically evaluated using the RAGAS methodology:
 
 | Metric | What it measures |
 |---|---|
-| **Faithfulness** | Are the claims in the answer actually supported by the retrieved excerpts? Detects hallucination. |
+| **Faithfulness** | Are the claims in the answer supported by the retrieved excerpts? Detects hallucination. |
 | **Context precision** | Are the retrieved excerpts relevant to the question? Measures retrieval quality. |
 
-Both are implemented as **LLM-as-judge** prompts sent to Claude — the same methodology RAGAS uses internally — keeping the evaluation stack self-contained with no additional dependencies.
-
----
-
-## Corpus
-
-- **951 PDFs** from a personal Zotero library accumulated during a PhD in computational neuroscience
-- Topics: attention, expectation, reward, decision-making, fMRI, EEG, predictive coding, Bayesian inference, dopamine, working memory, and more
-- Chunked at 300 words with 30-word overlap → ~46,000 indexed excerpts
+Both implemented as LLM-as-judge prompts sent to Claude — self-contained, no additional dependencies.
 
 ---
 
@@ -88,11 +94,11 @@ Both are implemented as **LLM-as-judge** prompts sent to Claude — the same met
 | Layer | Tool |
 |---|---|
 | Embeddings | `sentence-transformers` · `all-MiniLM-L6-v2` |
-| Vector store | Pinecone (serverless) |
+| Vector store | Pinecone (serverless) · two namespaces |
 | LLM | Anthropic Claude API (`claude-haiku-4-5`) |
-| Agent | Claude-based query reformulation loop |
-| Evaluation | RAGAS · `langchain-anthropic` |
+| Agent | Scope check + query reformulation + LLM-as-judge |
 | PDF parsing | PyMuPDF |
+| PubMed scraping | NCBI E-utilities (esearch + efetch) |
 | UI | Streamlit |
 | Hosting | Streamlit Community Cloud |
 
@@ -114,13 +120,22 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-> **Ingestion** (`python ingest.py`) is a one-time step that reads PDFs from a local path and uploads embeddings to Pinecone. The live demo uses a pre-populated index — you don't need to re-run it.
+### Ingesting the corpora (one-time)
+
+```bash
+# Neuroscience library (requires PDFs in Google Drive path set in ingest.py)
+python ingest.py
+
+# Philips MRI/fMRI corpus
+python fetch_philips_papers.py   # scrapes PubMed → philips_papers.csv
+python ingest_philips.py         # fetches full text, embeds, upserts to Pinecone
+```
 
 ---
 
 ## Relevance to clinical AI
 
-RAG is a core pattern in enterprise healthtech: it lets LLMs reason over proprietary document corpora (clinical guidelines, trial reports, patient records) without retraining or exposing sensitive data to the model. This project demonstrates the full pipeline — ingestion, retrieval, agentic query refinement, grounded generation, and automated evaluation — applied to a real scientific corpus.
+RAG is a core pattern in enterprise healthtech: it lets LLMs reason over proprietary document corpora (clinical guidelines, trial reports, patient records) without retraining or exposing sensitive data to the model. This project demonstrates the full pipeline — ingestion, retrieval, agentic query refinement, grounded generation, and automated evaluation — applied to two real scientific corpora, one of which is Philips' own published MRI/fMRI research.
 
 ---
 
@@ -135,20 +150,18 @@ RAG and fine-tuning solve different problems and are often complementary.
 - Data privacy prevents sending training data to a provider
 
 **Fine-tuning** is the right choice when:
-- You need the model to internalise a specific output format or clinical terminology (e.g. structured discharge summaries)
+- You need the model to internalise a specific output format or clinical terminology
 - Latency is critical and a shorter prompt is needed
 - You have high-quality labelled examples of the desired behaviour
 - You want a smaller, cheaper model to match a larger one on a narrow task
 
-**For NeuroRAG specifically**, a fine-tuned model would add value as a second layer: a smaller base model (e.g. Llama 3 8B or GPT-4o mini) fine-tuned on neuroscience Q&A pairs generated from the corpus, then used as the generator instead of calling the full Claude API. The training pipeline would be:
+**For NeuroRAG specifically**, a fine-tuned model would add value as a second layer: a smaller base model (e.g. Llama 3 8B) fine-tuned on Q&A pairs generated from the corpus, then used as the generator instead of calling the full Claude API. The training pipeline would be:
 
 1. Generate synthetic Q&A pairs from paper chunks using Claude (`chunk → question + ideal answer`)
 2. Format as JSONL instruction pairs
 3. Fine-tune via OpenAI's fine-tuning API or with `transformers` + `peft` (LoRA) on a local/cloud GPU
 4. Swap the generator in `rag.py` for the fine-tuned model endpoint
 5. Compare RAGAS scores against the base model baseline
-
-This would reduce per-query cost and latency while specialising the model's vocabulary — the main practical benefit in a clinical deployment where the same narrow task runs millions of times.
 
 ---
 

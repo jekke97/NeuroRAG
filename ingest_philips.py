@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone, ServerlessSpec
+from pinecone.errors.exceptions import NotFoundError as PineconeNotFoundError
 from tqdm import tqdm
 import requests
 
@@ -132,7 +133,10 @@ def main():
     index = pc.Index(INDEX_NAME)
 
     print(f"Clearing namespace '{NAMESPACE}' for fresh ingest…")
-    index.delete(delete_all=True, namespace=NAMESPACE)
+    try:
+        index.delete(delete_all=True, namespace=NAMESPACE)
+    except PineconeNotFoundError:
+        pass  # namespace doesn't exist yet — nothing to clear
 
     all_ids, all_texts, all_metas = [], [], []
     full_text_count = 0
